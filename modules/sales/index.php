@@ -1,112 +1,244 @@
 <?php
 define('APPDIR', 'barpos');
 session_start();
+
 require_once '../../includes/db.php';
 require_once '../../includes/functions.php';
 require_once '../../includes/auth.php';
 require_once '../../includes/validate.php';
 require_once '../../includes/print/receipt_printer.php';
+require_once '../../includes/services/StockService.php';
+
 requireLogin();
 
-$formErrors  = [];
-$lastSaleId  = null;
+$formErrors = [];
+$lastSaleId = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
     verifyCsrf();
 
+    /* =========================
+       DELETE SALE
+    ==========================*/
     if (isset($_POST['delete_id'])) {
         $id = (int)$_POST['delete_id'];
+
         $conn->query("DELETE FROM sales WHERE id=$id");
-        auditLog($conn,'sale_delete',"Deleted sale $id");
-        $_SESSION['flash'] = ['msg'=>'Sale deleted.','type'=>'success'];
-        header("Location: ".$_SERVER['PHP_SELF']."?date=".($_POST['current_date']??date('Y-m-d'))); exit;
+        auditLog($conn, 'sale_delete', "Deleted sale $id");
+
+        $_SESSION['flash'] = ['msg' => 'Sale deleted.', 'type' => 'success'];
+
+        header("Location: " . $_SERVER['PHP_SELF'] . "?date=" . ($_POST['current_date'] ?? date('Y-m-d')));
+        exit;
     }
 
+    /* =========================
+       EDIT SALE
+    ==========================*/
     if (isset($_POST['edit_id'])) {
+
         $id    = (int)$_POST['edit_id'];
         $cat   = (int)$_POST['category_id'];
-        $desc  = trim($_POST['description']??'');
-        $qty   = (float)($_POST['quantity']??1);
-        $price = (float)($_POST['unit_price']??0);
-        $amt   = round($qty*$price,2);
-        $pay   = $_POST['payment_method']??'cash';
-        $date  = trim($_POST['sale_date']??'');
-        $errs  = validateSale(array_merge($_POST,['amount'=>$amt]));
+        $desc  = trim($_POST['description'] ?? '');
+        $qty   = (float)($_POST['quantity'] ?? 1);
+        $price = (float)($_POST['unit_price'] ?? 0);
+        $amt   = round($qty * $price, 2);
+        $pay   = $_POST['payment_method'] ?? 'cash';
+        $date  = trim($_POST['sale_date'] ?? '');
+
+        $errs = validateSale(array_merge($_POST, ['amount' => $amt]));
+
         if (empty($errs)) {
-            $stmt=$conn->prepare("UPDATE sales SET category_id=?,description=?,quantity=?,unit_price=?,amount=?,payment_method=?,sale_date=? WHERE id=?");
-            $stmt->bind_param("isdddssi",$cat,$desc,$qty,$price,$amt,$pay,$date,$id);
-            $stmt->execute(); $stmt->close();
-            auditLog($conn,'sale_edit',"Edited sale $id");
-            $_SESSION['flash']=['msg'=>'&#10003; Sale updated.','type'=>'success'];
+
+            $stmt = $conn->prepare("
+                UPDATE sales
+                SET category_id=?, description=?, quantity=?, unit_price=?, amount=?, payment_method=?, sale_date=?
+                WHERE id=?
+            ");
+
+            $stmt->bind_param(
+                "isdddssi",
+                $cat,
+                $desc,
+                $qty,
+                $price,
+                $amt,
+                $pay,
+                $date,
+                $id
+            );
+
+            $stmt->execute();
+            $stmt->close();
+
+            auditLog($conn, 'sale_edit', "Edited sale $id");
+
+            $_SESSION['flash'] = ['msg' => '&#10003; Sale updated.', 'type' => 'success'];
+
         } else {
-            $_SESSION['flash']=['msg'=>implode(' | ',$errs),'type'=>'error'];
+            $_SESSION['flash'] = ['msg' => implode(' | ', $errs), 'type' => 'error'];
         }
-        header("Location: ".$_SERVER['PHP_SELF']."?date=$date"); exit;
+
+        header("Location: " . $_SERVER['PHP_SELF'] . "?date=$date");
+        exit;
     }
 
-    // Add new sale
-    $cat    = (int)($_POST['category_id']??0);
-    $desc   = trim($_POST['description']??'');
-    $qty    = (float)($_POST['quantity']??1);
-    $price  = (float)($_POST['unit_price']??0);
-    $pay    = $_POST['payment_method']??'cash';
-    $date   = trim($_POST['sale_date']??date('Y-m-d'));
-    $amt    = round($qty*$price,2);
-    $stockId= isset($_POST['stock_item_id']) ? (int)$_POST['stock_item_id'] : null;
+    /* =========================
+       ADD SALE (SPRINT 1 FIXED)
+    ==========================*/
+    $cat    = (int)($_POST['category_id'] ?? 0);
+    $desc   = trim($_POST['description'] ?? '');
+    $qty    = (float)($_POST['quantity'] ?? 1);
+    $price  = (float)($_POST['unit_price'] ?? 0);
+    $pay    = $_POST['payment_method'] ?? 'cash';
+    $date   = trim($_POST['sale_date'] ?? date('Y-m-d'));
+    $amt    = round($qty * $price, 2);
 
-    $formErrors = validateSale(array_merge($_POST,['amount'=>$amt]));
+    $stockId = isset($_POST['stock_item_id']) ? (int)$_POST['stock_item_id'] : null;
+
+    $formErrors = validateSale(array_merge($_POST, ['amount' => $amt]));
 
     if (empty($formErrors)) {
-        if (isDuplicateSale($conn,$cat,$desc,$amt,$date) && !isset($_POST['force_submit'])) {
+
+        if (isDuplicateSale($conn, $cat, $desc, $amt, $date) && !isset($_POST['force_submit'])) {
             $formErrors[] = 'DUPLICATE_WARNING';
         } else {
-            // Insert sale
-            $siSql = $stockId ? $stockId : 'NULL';
-            $conn->query("INSERT INTO sales (category_id,stock_item_id,description,quantity,unit_price,amount,payment_method,sale_date)
-                          VALUES ($cat,$siSql,'".$conn->real_escape_string($desc)."',$qty,$price,$amt,'".$conn->real_escape_string($pay)."','$date')");
-            $newId = $conn->insert_id;
 
-            // Auto-deduct stock if linked
-            if ($stockId) {
-                $conn->query("UPDATE stock_items SET quantity=GREATEST(0,quantity-$qty) WHERE id=$stockId");
-                $note = "Sale #$newId";
-                $today= date('Y-m-d');
-                $conn->query("INSERT INTO stock_movements (stock_item_id,movement_type,quantity,note,moved_at) VALUES ($stockId,'out',$qty,'$note','$today')");
+            $conn->begin_transaction();
+
+            try {
+
+                // SAFE INSERT (NO SQL INJECTION)
+                $stmt = $conn->prepare("
+                    INSERT INTO sales (
+                        category_id,
+                        stock_item_id,
+                        description,
+                        quantity,
+                        unit_price,
+                        amount,
+                        payment_method,
+                        sale_date
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ");
+
+                $stmt->bind_param(
+                    "iissddss",
+                    $cat,
+                    $stockId,
+                    $desc,
+                    $qty,
+                    $price,
+                    $amt,
+                    $pay,
+                    $date
+                );
+
+                if (!$stmt->execute()) {
+                    throw new Exception("Insert failed: " . $stmt->error);
+                }
+
+                $newId = $stmt->insert_id;
+                $stmt->close();
+
+                // STOCK HANDLING (single source of truth)
+                if ($stockId) {
+                    StockService::deduct($conn, $stockId, $qty, "Sale #$newId");
+                }
+
+                auditLog($conn, 'sale_add', "Sale #$newId TZS $amt");
+
+                $conn->commit();
+
+                // PRINT AFTER COMMIT
+                printSaleReceipt($conn, $newId);
+
+                $_SESSION['flash'] = [
+                    'msg' => '&#10003; Sale recorded & receipt printed.',
+                    'type' => 'success'
+                ];
+
+                header("Location: " . $_SERVER['PHP_SELF'] . "?date=$date");
+                exit;
+
+            } catch (Exception $e) {
+
+                $conn->rollback();
+
+                $_SESSION['flash'] = [
+                    'msg' => 'Sale failed: ' . $e->getMessage(),
+                    'type' => 'error'
+                ];
             }
-
-            auditLog($conn,'sale_add',"Sale #$newId TZS $amt");
-
-            // AUTO PRINT RECEIPT
-            printSaleReceipt($conn, $newId);
-
-            $_SESSION['flash']=['msg'=>'&#10003; Sale recorded & receipt printed.','type'=>'success'];
-            header("Location: ".$_SERVER['PHP_SELF']."?date=$date"); exit;
         }
     }
 }
 
-$filter  = isset($_GET['date'])?sanitize($conn,$_GET['date']):date('Y-m-d');
-$editRow = isset($_GET['edit'])?$conn->query("SELECT * FROM sales WHERE id=".(int)$_GET['edit'])->fetch_assoc():null;
-$perPage = 20; $page=max(1,(int)($_GET['page']??1)); $offset=($page-1)*$perPage;
+/* =========================
+   DATA LOAD (UNCHANGED)
+==========================*/
+$filter  = isset($_GET['date']) ? sanitize($conn, $_GET['date']) : date('Y-m-d');
+$editRow = isset($_GET['edit']) ? $conn->query("SELECT * FROM sales WHERE id=".(int)$_GET['edit'])->fetch_assoc() : null;
+
+$perPage = 20;
+$page    = max(1, (int)($_GET['page'] ?? 1));
+$offset  = ($page - 1) * $perPage;
+
 $total   = $conn->query("SELECT COUNT(*) AS c FROM sales WHERE sale_date='$filter'")->fetch_assoc()['c'];
-$pages   = max(1,ceil($total/$perPage));
+$pages   = max(1, ceil($total / $perPage));
 
 $cols     = $conn->query("SHOW COLUMNS FROM sales")->fetch_all(MYSQLI_ASSOC);
-$colNames = array_column($cols,'Field');
-$hasNew   = in_array('payment_method',$colNames);
+$colNames = array_column($cols, 'Field');
+$hasNew   = in_array('payment_method', $colNames);
 
-$sales      = $conn->query("SELECT s.*,c.name AS cat,c.type AS cat_type FROM sales s JOIN categories c ON s.category_id=c.id WHERE s.sale_date='$filter' ORDER BY s.id DESC LIMIT $perPage OFFSET $offset");
-$totals     = $conn->query("SELECT c.type,SUM(s.amount) AS total FROM sales s JOIN categories c ON s.category_id=c.id WHERE s.sale_date='$filter' GROUP BY c.type")->fetch_all(MYSQLI_ASSOC);
-$byType     = array_column($totals,'total','type');
-$payBreak   = [];
+$sales = $conn->query("
+    SELECT s.*, c.name AS cat, c.type AS cat_type
+    FROM sales s
+    JOIN categories c ON s.category_id=c.id
+    WHERE s.sale_date='$filter'
+    ORDER BY s.id DESC
+    LIMIT $perPage OFFSET $offset
+");
+
+$totals = $conn->query("
+    SELECT c.type, SUM(s.amount) AS total
+    FROM sales s
+    JOIN categories c ON s.category_id=c.id
+    WHERE s.sale_date='$filter'
+    GROUP BY c.type
+")->fetch_all(MYSQLI_ASSOC);
+
+$byType = array_column($totals, 'total', 'type');
+
+$payBreak = [];
 if ($hasNew) {
-    $res=$conn->query("SELECT payment_method,SUM(amount) AS total FROM sales WHERE sale_date='$filter' GROUP BY payment_method");
-    if($res) while($r=$res->fetch_assoc()) $payBreak[$r['payment_method']]=$r['total'];
+    $res = $conn->query("
+        SELECT payment_method, SUM(amount) AS total
+        FROM sales
+        WHERE sale_date='$filter'
+        GROUP BY payment_method
+    ");
+
+    if ($res) {
+        while ($r = $res->fetch_assoc()) {
+            $payBreak[$r['payment_method']] = $r['total'];
+        }
+    }
 }
-$categories  = $conn->query("SELECT * FROM categories ORDER BY name")->fetch_all(MYSQLI_ASSOC);
-$stockItems  = $conn->query("SELECT si.id,si.name,si.sku,si.barcode,si.selling_price,si.quantity,si.unit,c.id AS cat_id FROM stock_items si JOIN categories c ON si.category_id=c.id WHERE si.is_active=1 ORDER BY si.name")->fetch_all(MYSQLI_ASSOC);
-$isDuplicate = in_array('DUPLICATE_WARNING',$formErrors);
-$formErrors  = array_filter($formErrors,fn($e)=>$e!=='DUPLICATE_WARNING');
+
+$categories = $conn->query("SELECT * FROM categories ORDER BY name")->fetch_all(MYSQLI_ASSOC);
+
+$stockItems = $conn->query("
+    SELECT si.id, si.name, si.sku, si.barcode, si.selling_price, si.quantity, si.unit, c.id AS cat_id
+    FROM stock_items si
+    JOIN categories c ON si.category_id=c.id
+    WHERE si.is_active=1
+    ORDER BY si.name
+")->fetch_all(MYSQLI_ASSOC);
+
+$isDuplicate = in_array('DUPLICATE_WARNING', $formErrors);
+$formErrors  = array_filter($formErrors, fn($e) => $e !== 'DUPLICATE_WARNING');
 
 require_once '../../includes/header.php';
 ?>
