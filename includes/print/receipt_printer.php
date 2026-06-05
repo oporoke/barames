@@ -7,7 +7,7 @@
  * Sends raw ESC/POS bytes directly to the printer via a
  * temporary file + Windows COPY command.
  */
-
+require_once __DIR__ . '/../services/PaymentService.php';
 class ReceiptPrinter {
 
     private $port   = 'USB001';
@@ -193,6 +193,109 @@ function printSaleReceiptt($conn, $saleId) {
     return true;
 }
 
+// function printSaleReceipt($conn, $saleId) {
+//     require_once __DIR__ . '/../settings.php';
+
+//     $sale = $conn->query("
+//         SELECT s.*, c.name AS cat
+//         FROM sales s
+//         JOIN categories c ON s.category_id = c.id
+//         WHERE s.id = $saleId
+//     ")->fetch_assoc();
+
+//     if (!$sale) {
+//         return false;
+//     }
+
+//     $bizName    = getSetting($conn, 'business_name', 'Bar & Restaurant');
+//     $bizPhone   = getSetting($conn, 'business_phone', '');
+//     $bizAddress = getSetting($conn, 'business_address', '');
+//     $footer     = getSetting($conn, 'receipt_footer', 'Thank you for your visit!');
+//     $currency   = getSetting($conn, 'currency_symbol', 'TZS');
+
+//     $payLabels = [
+//         'cash'         => 'Cash',
+//         'mobile_money' => 'Mobile Money',
+//         'card'         => 'Card',
+//         'other'        => 'Other',
+//     ];
+
+//     $payMethod = $payLabels[$sale['payment_method'] ?? 'cash'] ?? 'Cash';
+//     $receiptNo = str_pad($saleId, 6, '0', STR_PAD_LEFT);
+
+//     $desc  = trim($sale['description'] ?: $sale['cat']);
+//     $qty   = (float)($sale['quantity'] ?? 1);
+//     $price = (float)($sale['unit_price'] ?? $sale['amount']);
+//     $total = (float)$sale['amount'];
+
+//     $p = new ReceiptPrinter('USB001');
+
+//     $p->init()
+//       ->normalFont()
+//       // HEADER
+//       ->align('center')
+//       ->bold(true)
+//       ->doubleHeight(true)
+//       ->line($bizName)
+//       ->doubleHeight(false)
+//       ->bold(false);
+
+//     if (!empty($bizAddress)) {
+//         $p->line($bizAddress);
+//     }
+
+//     if (!empty($bizPhone)) {
+//         $p->line('Tel: ' . $bizPhone);
+//     }
+
+//     $p->divider('=')
+//       ->bold(true)
+//       ->line('CUSTOMER RECEIPT')
+//       ->bold(false)
+//       ->divider()
+
+//       // RECEIPT INFO
+//       ->align('left')
+//       ->row('Receipt #', $receiptNo)
+//       ->row('Date', date('d/m/Y H:i', strtotime($sale['created_at'])))
+//       ->row('Cashier', $_SESSION['user_name'] ?? 'Staff')
+//       ->divider();
+
+//     // ITEM
+//     $p->line(substr($desc, 0, 32));
+
+//     $p->row(
+//         $qty . ' x ' . number_format($price, 0),
+//         number_format($total, 0)
+//     );
+
+//     $p->divider();
+
+//     // TOTAL
+//     $p->bold(true)
+//       ->row('TOTAL', $currency . ' ' . number_format($total, 0))
+//       ->bold(false)
+//       ->divider();
+
+//     // PAYMENT
+//     $p->row('Payment', $payMethod);
+
+//     $p->divider()
+//       ->align('center')
+//       ->line('*** THANK YOU ***');
+
+//     if (!empty($footer)) {
+//         $p->line($footer);
+//     }
+
+//     $p->emptyLine(2)
+//       ->cut()
+//       ->openDrawer()
+//       ->printReceipt();
+
+//     return true;
+// }
+
 function printSaleReceipt($conn, $saleId) {
     require_once __DIR__ . '/../settings.php';
 
@@ -203,16 +306,39 @@ function printSaleReceipt($conn, $saleId) {
         WHERE s.id = $saleId
     ")->fetch_assoc();
 
-    if (!$sale) {
-        return false;
+    if (!$sale) return false;
+
+    $bizName    = getSetting($conn, 'business_name',    'Bar & Restaurant');
+    $bizPhone   = getSetting($conn, 'business_phone',   '');
+    $bizAddress = getSetting($conn, 'business_address', '');
+    $footer     = getSetting($conn, 'receipt_footer',   'Thank you for your visit!');
+    $currency   = getSetting($conn, 'currency_symbol',  'TZS');
+
+    $receiptNo = str_pad($saleId, 6, '0', STR_PAD_LEFT);
+    $desc      = trim($sale['description'] ?: $sale['cat']);
+    $qty       = (float)($sale['quantity']   ?? 1);
+    $price     = (float)($sale['unit_price'] ?? $sale['amount']);
+    $total     = (float)$sale['amount'];
+
+    // ── FETCH SPLIT PAYMENTS ─────────────────────────────────
+    // Find the most recent sale_transaction for this sale date + amount
+    $txnRow = $conn->query("
+        SELECT id FROM sale_transactions
+        WHERE sale_date = '{$sale['sale_date']}'
+          AND total     = $total
+        ORDER BY id DESC
+        LIMIT 1
+    ")->fetch_assoc();
+
+    $splitPayments = [];
+    $hasSplit      = false;
+
+    if ($txnRow) {
+        $splitPayments = PaymentService::getPayments($conn, (int)$txnRow['id']);
+        $hasSplit      = count($splitPayments) > 1;
     }
 
-    $bizName    = getSetting($conn, 'business_name', 'Bar & Restaurant');
-    $bizPhone   = getSetting($conn, 'business_phone', '');
-    $bizAddress = getSetting($conn, 'business_address', '');
-    $footer     = getSetting($conn, 'receipt_footer', 'Thank you for your visit!');
-    $currency   = getSetting($conn, 'currency_symbol', 'TZS');
-
+    // Fallback: legacy single payment label
     $payLabels = [
         'cash'         => 'Cash',
         'mobile_money' => 'Mobile Money',
@@ -220,78 +346,102 @@ function printSaleReceipt($conn, $saleId) {
         'other'        => 'Other',
     ];
 
-    $payMethod = $payLabels[$sale['payment_method'] ?? 'cash'] ?? 'Cash';
-    $receiptNo = str_pad($saleId, 6, '0', STR_PAD_LEFT);
-
-    $desc  = trim($sale['description'] ?: $sale['cat']);
-    $qty   = (float)($sale['quantity'] ?? 1);
-    $price = (float)($sale['unit_price'] ?? $sale['amount']);
-    $total = (float)$sale['amount'];
-
+    // ── BUILD RECEIPT ────────────────────────────────────────
     $p = new ReceiptPrinter('USB001');
 
     $p->init()
       ->normalFont()
+
       // HEADER
       ->align('center')
-      ->bold(true)
-      ->doubleHeight(true)
+      ->bold(true)->doubleHeight(true)
       ->line($bizName)
-      ->doubleHeight(false)
-      ->bold(false);
+      ->doubleHeight(false)->bold(false);
 
-    if (!empty($bizAddress)) {
-        $p->line($bizAddress);
-    }
-
-    if (!empty($bizPhone)) {
-        $p->line('Tel: ' . $bizPhone);
-    }
+    if (!empty($bizAddress)) $p->line($bizAddress);
+    if (!empty($bizPhone))   $p->line('Tel: ' . $bizPhone);
 
     $p->divider('=')
-      ->bold(true)
-      ->line('CUSTOMER RECEIPT')
-      ->bold(false)
+      ->bold(true)->line('CUSTOMER RECEIPT')->bold(false)
       ->divider()
 
-      // RECEIPT INFO
+      // RECEIPT META
       ->align('left')
       ->row('Receipt #', $receiptNo)
-      ->row('Date', date('d/m/Y H:i', strtotime($sale['created_at'])))
-      ->row('Cashier', $_SESSION['user_name'] ?? 'Staff')
-      ->divider();
+      ->row('Date',      date('d/m/Y H:i', strtotime($sale['created_at'])))
+      ->row('Cashier',   $_SESSION['user_name'] ?? 'Staff')
+      ->divider()
 
-    // ITEM
-    $p->line(substr($desc, 0, 32));
+      // ITEM LINE
+      ->line(substr($desc, 0, 32))
+      ->row(
+          $qty . ' x ' . number_format($price, 0),
+          number_format($total, 0)
+      )
+      ->divider()
 
-    $p->row(
-        $qty . ' x ' . number_format($price, 0),
-        number_format($total, 0)
-    );
-
-    $p->divider();
-
-    // TOTAL
-    $p->bold(true)
+      // TOTAL
+      ->bold(true)
       ->row('TOTAL', $currency . ' ' . number_format($total, 0))
       ->bold(false)
       ->divider();
 
-    // PAYMENT
-    $p->row('Payment', $payMethod);
+    // ── PAYMENT SECTION ──────────────────────────────────────
+    if (!empty($splitPayments)) {
 
+        $totalPaid  = 0;
+        $hasCash    = false;
+
+        foreach ($splitPayments as $sp) {
+            $method = $payLabels[$sp['method']] ?? 'Other';
+            $amt    = (float)$sp['amount'];
+            $totalPaid += $amt;
+
+            // Build label — append M-Pesa ref if present
+            $label = $method;
+            if ($sp['method'] === 'mobile_money' && !empty($sp['reference'])) {
+                $label .= ' ' . $sp['reference'];
+            }
+
+            $p->row($label, $currency . ' ' . number_format($amt, 0));
+
+            if ($sp['method'] === 'cash') $hasCash = true;
+        }
+
+        // Change due line
+        $change = $totalPaid - $total;
+        if ($change > 0) {
+            $p->divider()
+              ->bold(true)
+              ->row('CHANGE DUE', $currency . ' ' . number_format($change, 0))
+              ->bold(false);
+        }
+
+    } else {
+        // Legacy single payment fallback
+        $payMethod = $payLabels[$sale['payment_method'] ?? 'cash'] ?? 'Cash';
+        $p->row('Payment', $payMethod);
+        $hasCash = ($sale['payment_method'] ?? 'cash') === 'cash';
+    }
+
+    // ── FOOTER ───────────────────────────────────────────────
     $p->divider()
       ->align('center')
       ->line('*** THANK YOU ***');
 
-    if (!empty($footer)) {
-        $p->line($footer);
-    }
+    if (!empty($footer)) $p->line($footer);
 
     $p->emptyLine(2)
-      ->cut()
-      ->openDrawer()
-      ->printReceipt();
+      ->cut();
+
+    // Only open cash drawer if cash was part of the payment
+    $hasCash = !empty($splitPayments)
+        ? (bool)array_filter($splitPayments, fn($sp) => $sp['method'] === 'cash')
+        : (($sale['payment_method'] ?? 'cash') === 'cash');
+
+    if ($hasCash) $p->openDrawer();
+
+    $p->printReceipt();
 
     return true;
 }
