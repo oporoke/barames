@@ -100,10 +100,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </div>
     <button type="submit" class="btn btn-primary btn-block">Sign In &#8594;</button>
   </form>
-
-  <div class="role-hint">
-    Default login: <strong>admin</strong> / <strong>admin123</strong>
-  </div>
 </div>
 </body>
 </html>

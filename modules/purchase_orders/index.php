@@ -23,7 +23,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $actual    = min($qty, $remaining);
             if ($actual <= 0) continue;
             $conn->query("UPDATE purchase_order_items SET quantity_received=quantity_received+$actual WHERE id=$poiId");
-            $conn->query("UPDATE stock_items SET quantity=quantity+$actual WHERE id=".(int)$poi['stock_item_id']);
+            //$conn->query("UPDATE stock_items SET quantity=quantity+$actual WHERE id=".(int)$poi['stock_item_id']);
+            $si = $conn->query("SELECT quantity, cost_price FROM stock_items WHERE id=".(int)$poi['stock_item_id'])->fetch_assoc();
+            $existingQty  = (float)$si['quantity'];
+            $existingCost = (float)$si['cost_price'];
+            $newCost      = (float)$poi['unit_cost'];
+
+            $avgCost = ($existingQty + $actual) > 0
+                ? (($existingQty * $existingCost) + ($actual * $newCost)) / ($existingQty + $actual)
+                : $newCost;
+
+            $avgCost = round($avgCost, 2);
+            $conn->query("UPDATE stock_items SET quantity=quantity+$actual, cost_price=$avgCost WHERE id=".(int)$poi['stock_item_id']);
             $today = date('Y-m-d');
             $note  = "PO #$orderId received";
             $conn->query("INSERT INTO stock_movements (stock_item_id,movement_type,quantity,note,moved_at) VALUES (".(int)$poi['stock_item_id'].",'in',$actual,'$note','$today')");
