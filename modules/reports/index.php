@@ -63,9 +63,17 @@ $cogsRow = q($conn,
 $totalCOGS = $cogsRow['t'];
 
 // ── EXPENSES ─────────────────────────────────────────────────────────
+// $expRow = q($conn,
+//     "SELECT COALESCE(SUM(amount),0) AS t FROM expenses
+//      WHERE expense_date BETWEEN ? AND ?",
+//     [$start, $end]
+// )->fetch_assoc();
+// $totalExpenses = $expRow['t'];
+// ── EXPENSES (exclude stock category) ────────────────────────────────
 $expRow = q($conn,
     "SELECT COALESCE(SUM(amount),0) AS t FROM expenses
-     WHERE expense_date BETWEEN ? AND ?",
+     WHERE expense_date BETWEEN ? AND ?
+     AND category_id != 5",
     [$start, $end]
 )->fetch_assoc();
 $totalExpenses = $expRow['t'];
@@ -75,6 +83,44 @@ $grossProfit = $totalSales - $totalCOGS;
 $netProfit   = $grossProfit - $totalExpenses;
 $grossMargin = $totalSales > 0 ? round(($grossProfit / $totalSales) * 100, 1) : 0;
 $netMargin   = $totalSales > 0 ? round(($netProfit   / $totalSales) * 100, 1) : 0;
+
+// ── CAPITAL INJECTIONS ───────────────────────────────────────────────
+$injRow = q($conn,
+    "SELECT COALESCE(SUM(amount),0) AS t FROM capital_injections
+     WHERE injection_date BETWEEN ? AND ?",
+    [$start, $end]
+)->fetch_assoc();
+$totalInjections = $injRow['t'];
+
+// ── STOCK PURCHASES (cash out) ───────────────────────────────────────
+// ── STOCK PURCHASES (from expenses where category = Stock) ───────────
+$stockBoughtRow = q($conn,
+    "SELECT COALESCE(SUM(amount),0) AS t FROM expenses
+     WHERE category_id = 5 AND expense_date BETWEEN ? AND ?",
+    [$start, $end]
+)->fetch_assoc();
+$totalStockBought = $stockBoughtRow['t'];
+
+// ── OPENING CASH (from daily_cash_control) ───────────────────────────
+// ── OPENING CASH (most recent record on or before start date) ────────
+$cashCtrlRow = q($conn,
+    "SELECT opening_cash, opening_lipa, closing_cash, closing_lipa
+     FROM daily_cash_control
+     WHERE report_date <= ?
+     ORDER BY report_date DESC
+     LIMIT 1",
+    [$start]
+)->fetch_assoc();
+
+$openingCash = $cashCtrlRow 
+    ? ($cashCtrlRow['closing_cash'] + $cashCtrlRow['closing_lipa']) 
+    : 0;
+$closingCash = $cashCtrlRow 
+    ? ($cashCtrlRow['closing_cash'] + $cashCtrlRow['closing_lipa']) 
+    : null;
+
+// ── CASH POSITION ────────────────────────────────────────────────────
+$cashPosition = $openingCash + $totalInjections + $totalSales - $totalExpenses - $totalStockBought;
 
 // ── TRANSACTION COUNT ────────────────────────────────────────────────
 $txnRow = q($conn,
@@ -568,6 +614,7 @@ if ($bestSelling) {
       <a href="export_pdf.php?type=<?= $type ?>&date=<?= $date ?>" target="_blank" class="rp-btn rp-btn-outline">&#128196; PDF</a>
       <a href="export_excel.php?type=<?= $type ?>&date=<?= $date ?>" class="rp-btn rp-btn-green">&#128196; Excel</a>
       <a href="http://localhost/barpos/modules/stock/report.php" target="_blank" class="rp-btn rp-btn-outline">&#128218; Stock</a>
+      <a href="daily_cash_control.php?date=<?= date('Y-m-d') ?>" class="rp-btn rp-btn-accent">&#128197; Cash Control</a>
     </div>
   </div>
 
@@ -631,6 +678,65 @@ if ($bestSelling) {
       <div class="kpi-sub">Per transaction</div>
     </div>
   </div>
+
+  <!-- CASH POSITION SECTION -->
+<div class="rp-card" style="margin-bottom:28px; border-left: 4px solid #0ea5e9;">
+  <div class="rp-section-title"><span style="background:#0ea5e9;"></span>Real-Time Business Cash Position</div>
+  <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:14px; margin-bottom:16px;">
+
+    <div style="padding:16px; background:var(--surface-2); border-radius:var(--radius-sm);">
+      <div class="kpi-label">Opening Cash</div>
+      <div class="kpi-value">TZS <?= number_format($openingCash, 0) ?></div>
+      <div class="kpi-sub">Cash + Lipa at start</div>
+    </div>
+
+    <div style="padding:16px; background:var(--surface-2); border-radius:var(--radius-sm);">
+      <div class="kpi-label">+ Capital Injected</div>
+      <div class="kpi-value positive">TZS <?= number_format($totalInjections, 0) ?></div>
+      <div class="kpi-sub">Investor top-ups</div>
+    </div>
+
+    <div style="padding:16px; background:var(--surface-2); border-radius:var(--radius-sm);">
+      <div class="kpi-label">+ Sales Collected</div>
+      <div class="kpi-value positive">TZS <?= number_format($totalSales, 0) ?></div>
+      <div class="kpi-sub">Revenue received</div>
+    </div>
+
+    <div style="padding:16px; background:var(--surface-2); border-radius:var(--radius-sm);">
+      <div class="kpi-label">− Expenses Paid</div>
+      <div class="kpi-value negative">TZS <?= number_format($totalExpenses, 0) ?></div>
+      <div class="kpi-sub">Operating costs</div>
+    </div>
+
+    <div style="padding:16px; background:var(--surface-2); border-radius:var(--radius-sm);">
+      <div class="kpi-label">− Stock Purchased</div>
+      <div class="kpi-value negative">TZS <?= number_format($totalStockBought, 0) ?></div>
+      <div class="kpi-sub">Purchase orders received</div>
+    </div>
+
+    <div style="padding:16px; background:<?= $cashPosition >= 0 ? 'var(--green-bg)' : 'var(--red-bg)' ?>; border-radius:var(--radius-sm); border: 1px solid <?= $cashPosition >= 0 ? 'var(--green)' : 'var(--red)' ?>;">
+      <div class="kpi-label" style="color:<?= $cashPosition >= 0 ? 'var(--green)' : 'var(--red)' ?>;">= Cash Position</div>
+      <div class="kpi-value <?= $cashPosition >= 0 ? 'positive' : 'negative' ?>" style="font-size:1.6rem;">
+        TZS <?= number_format($cashPosition, 0) ?>
+      </div>
+      <div class="kpi-sub"><?= $cashPosition >= 0 ? '✓ Business has cash' : '⚠ Cash is negative' ?></div>
+    </div>
+
+  </div>
+
+  <?php if ($closingCash !== null): ?>
+  <div style="font-size:0.8rem; color:var(--ink-muted); padding-top:10px; border-top:1px solid var(--border);">
+    Actual closing balance recorded: <strong style="color:var(--ink);">TZS <?= number_format($closingCash, 0) ?></strong>
+    <?php
+      $variance = $closingCash - $cashPosition;
+    ?>
+    &nbsp;|&nbsp; Variance vs calculated: 
+    <strong style="color:<?= abs($variance) < 1000 ? 'var(--green)' : 'var(--amber)' ?>;">
+      TZS <?= number_format($variance, 0) ?>
+    </strong>
+  </div>
+  <?php endif; ?>
+</div>
 
   <!-- CHARTS ROW -->
   <?php if (!empty($deptLabels)): ?>

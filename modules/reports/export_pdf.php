@@ -75,6 +75,16 @@ $netProfit   = $grossProfit - $totalExpenses;
 $grossMargin = $totalSales > 0 ? round(($grossProfit / $totalSales) * 100, 1) : 0;
 $netMargin   = $totalSales > 0 ? round(($netProfit   / $totalSales) * 100, 1) : 0;
 
+
+$payBreakdown = q($conn,
+    "SELECT
+        COALESCE(SUM(CASE WHEN payment_method='cash'         THEN amount ELSE 0 END),0) AS cash_sales,
+        COALESCE(SUM(CASE WHEN payment_method='mobile_money' THEN amount ELSE 0 END),0) AS lipa_sales
+     FROM sales
+     WHERE sale_date BETWEEN ? AND ?",
+    [$start, $end]
+)->fetch_assoc();
+
 $txnCount  = q($conn,
     "SELECT COUNT(*) AS c FROM sale_transactions
      WHERE type='sale' AND sale_date BETWEEN ? AND ?",
@@ -84,12 +94,13 @@ $avgTicket = $txnCount > 0 ? $totalSales / $txnCount : 0;
 
 // ── SALES BY DEPT ─────────────────────────────────────────────────────
 $salesByDept = q($conn,
-    "SELECT c.name AS cat, COALESCE(SUM(si.line_total),0) AS total
+    "SELECT c.name AS cat, COALESCE(SUM(s.amount),0) AS total
      FROM categories c
-     LEFT JOIN sale_items si ON si.category_id = c.id
-     LEFT JOIN sale_transactions st ON si.transaction_id = st.id
-       AND st.type='sale' AND st.sale_date BETWEEN ? AND ?
-     GROUP BY c.id ORDER BY total DESC",
+     LEFT JOIN sales s ON s.category_id = c.id
+       AND s.sale_date BETWEEN ? AND ?
+     WHERE c.type IN ('drinks', 'kitchen')
+     GROUP BY c.id
+     ORDER BY c.type DESC",
     [$start, $end]
 )->fetch_all(MYSQLI_ASSOC);
 
@@ -337,6 +348,15 @@ ob_start();
     <td class="r muted"><?= $share ?>%</td>
   </tr>
   <?php endforeach; ?>
+  </tbody>
+</table>
+<div class="section-title">Payment Breakdown</div>
+<table class="data">
+  <thead><tr><th>Method</th><th class="r">Amount (TZS)</th></tr></thead>
+  <tbody>
+    <tr><td>&#128181; Cash</td><td class="r"><?= number_format($payBreakdown['cash_sales'], 0) ?></td></tr>
+    <tr><td>&#128242; Lipa / Mobile Money</td><td class="r"><?= number_format($payBreakdown['lipa_sales'], 0) ?></td></tr>
+    <tr><td class="bold">Total</td><td class="r bold"><?= number_format($totalSales, 0) ?></td></tr>
   </tbody>
 </table>
 
