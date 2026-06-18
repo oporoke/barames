@@ -1,0 +1,34 @@
+I can see you've uploaded a file called **barpos.zip**. Let me take a look at what's inside!This is a PHP-based **Bar POS (Point of Sale)** system! Let me look at the actual source files to get a better picture.Here's a solid overview of what's in **barpos**:
+
+**What it is:** A PHP/MySQL Point of Sale system built for a bar/restaurant, with modules for both a drinks counter and kitchen.
+
+**Project structure:**
+
+The application is organized into modules under `barpos/modules/`:
+
+- **sales** — the main POS interface for recording sales
+- **stock** — inventory/stock management with low-stock alerts
+- **reports** — sales reports, daily cash control, PDF/Excel exports (using dompdf)
+- **expenses** — expense tracking
+- **purchase_orders** — supplier purchase orders
+- **suppliers** — supplier management
+- **users** — user/staff management
+- **audit** — audit trail
+- **system** — settings and database backup
+
+**Tech stack:**
+
+- PHP with MySQLi (no ORM)
+- dompdf for PDF generation (stock reports, receipts, cash control)
+- Composer for dependency management
+- Custom CSS (`assets/css/style.css`), no frontend framework
+- Thermal receipt printer support (POS-80 serial/USB)
+
+**Notable features from the code:**
+
+- Dashboard shows today's sales, expenses, net revenue, drinks vs kitchen breakdown, and low-stock alerts
+- Barcode/QR scanning via `api/scan.php`
+- Receipt printing via USB/serial thermal printer
+- Role-based auth (`includes/auth.php`)
+
+What would you like to do with this? I can review the code for bugs, security issues, suggest improvements, help add a feature, or anything else.

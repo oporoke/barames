@@ -22,40 +22,162 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
        DELETE SALE
     ==========================*/
     if (isset($_POST['delete_id'])) {
-        $id = (int)$_POST['delete_id'];
-        $conn->query("DELETE FROM sales WHERE id=$id");
-        auditLog($conn, 'sale_delete', "Deleted sale $id");
-        $_SESSION['flash'] = ['msg' => 'Sale deleted.', 'type' => 'success'];
-        header("Location: " . $_SERVER['PHP_SELF'] . "?date=" . ($_POST['current_date'] ?? date('Y-m-d')));
+        $saleId = (int)$_POST['delete_id'];
+        $redirectDate = $_POST['current_date'] ?? date('Y-m-d');
+
+        // Look up the parent transaction via the link stored on the sales row.
+        $row = $conn->query("SELECT transaction_id FROM sales WHERE id=$saleId")->fetch_assoc();
+        $txnId = $row ? (int)$row['transaction_id'] : 0;
+
+        $conn->begin_transaction();
+        try {
+            if ($txnId) {
+                // Reverse stock for every item in the transaction.
+                $items = $conn->query("
+                    SELECT stock_item_id, quantity
+                    FROM sale_items
+                    WHERE transaction_id = $txnId AND stock_item_id IS NOT NULL
+                ");
+                while ($item = $items->fetch_assoc()) {
+                    StockService::restore(
+                        $conn,
+                        (int)$item['stock_item_id'],
+                        (float)$item['quantity'],
+                        "Void Txn #$txnId"
+                    );
+                }
+
+                // Delete the transaction — cascades to sale_items and transaction_payments.
+                $conn->query("DELETE FROM sale_transactions WHERE id=$txnId");
+
+                // Delete all legacy sales rows that belonged to this transaction.
+                $conn->query("DELETE FROM sales WHERE transaction_id=$txnId");
+
+                auditLog($conn, 'sale_delete', "Voided Txn #$txnId (triggered by legacy sale #$saleId)");
+            } else {
+                // Pre-multicart legacy row with no linked transaction — delete row only.
+                $conn->query("DELETE FROM sales WHERE id=$saleId");
+                auditLog($conn, 'sale_delete', "Deleted legacy sale #$saleId (no linked transaction)");
+            }
+
+            $conn->commit();
+            $_SESSION['flash'] = ['msg' => 'Sale deleted.', 'type' => 'success'];
+        } catch (Exception $e) {
+            $conn->rollback();
+            $_SESSION['flash'] = ['msg' => 'Delete failed: ' . $e->getMessage(), 'type' => 'error'];
+        }
+
+        header("Location: " . $_SERVER['PHP_SELF'] . "?date=$redirectDate");
         exit;
     }
 
     /* =========================
-       EDIT SALE (single legacy row)
+       EDIT SALE — single sale_items row
+       A "sale" row maps to one line in the transaction.
+       We update that sale_item, recalculate the transaction total,
+       sync the legacy sales row, and adjust stock if qty changed.
     ==========================*/
     if (isset($_POST['edit_id'])) {
-        $id    = (int)$_POST['edit_id'];
-        $cat   = (int)$_POST['category_id'];
-        $desc  = trim($_POST['description'] ?? '');
-        $qty   = (float)($_POST['quantity'] ?? 1);
-        $price = (float)($_POST['unit_price'] ?? 0);
-        $amt   = round($qty * $price, 2);
-        $pay   = $_POST['payment_method'] ?? 'cash';
-        $date  = trim($_POST['sale_date'] ?? '');
+        $saleId  = (int)$_POST['edit_id'];
+        $cat     = (int)$_POST['category_id'];
+        $desc    = trim($_POST['description'] ?? '');
+        $qty     = (float)($_POST['quantity']   ?? 1);
+        $price   = (float)($_POST['unit_price'] ?? 0);
+        $newLine = round($qty * $price, 2);
+        $pay     = $_POST['payment_method'] ?? 'cash';
+        $date    = trim($_POST['sale_date'] ?? '');
 
-        $errs = validateSale(array_merge($_POST, ['amount' => $amt]));
+        $errs = validateSale(array_merge($_POST, ['amount' => $newLine]));
 
         if (empty($errs)) {
-            $stmt = $conn->prepare("
-                UPDATE sales
-                SET category_id=?, description=?, quantity=?, unit_price=?, amount=?, payment_method=?, sale_date=?
-                WHERE id=?
-            ");
-            $stmt->bind_param("isdddssi", $cat, $desc, $qty, $price, $amt, $pay, $date, $id);
-            $stmt->execute();
-            $stmt->close();
-            auditLog($conn, 'sale_edit', "Edited sale $id");
-            $_SESSION['flash'] = ['msg' => '&#10003; Sale updated.', 'type' => 'success'];
+
+            // Fetch the current sales row so we know its transaction_id and old qty.
+            $cur = $conn->query("SELECT * FROM sales WHERE id=$saleId")->fetch_assoc();
+            $txnId        = $cur ? (int)$cur['transaction_id'] : 0;
+            $oldQty       = $cur ? (float)$cur['quantity']      : 0;
+            $stockItemId  = $cur ? (int)$cur['stock_item_id']   : 0;
+
+            $conn->begin_transaction();
+            try {
+                if ($txnId) {
+                    // Update the matching sale_items row.
+                    $stmt = $conn->prepare("
+                        UPDATE sale_items
+                        SET category_id=?, description=?, quantity=?, unit_price=?, line_total=?
+                        WHERE transaction_id=? AND id=(
+                            SELECT si_id FROM (
+                                SELECT id AS si_id FROM sale_items
+                                WHERE transaction_id=? ORDER BY id ASC LIMIT 1
+                            ) AS sub
+                        )
+                    ");
+                    // Simpler: match by the legacy sales row id via a sub-select isn't possible
+                    // without a direct FK, so we update by finding the sale_item that shares
+                    // the same description and was inserted in the same transaction.
+                    // Since we stored transaction_id on sales, use it to target the right row.
+                    $siRes = $conn->query("
+                        SELECT id FROM sale_items
+                        WHERE transaction_id=$txnId
+                        ORDER BY id ASC
+                        LIMIT 1
+                    ");
+                    $stmt->close();
+
+                    // Recalculate transaction total from all sale_items after this update.
+                    // Step 1: update the sale_item row (match by txn + description for the specific item).
+                    $upSi = $conn->prepare("
+                        UPDATE sale_items
+                        SET category_id=?, description=?, quantity=?, unit_price=?, line_total=?
+                        WHERE transaction_id=? AND description=?
+                        LIMIT 1
+                    ");
+                    $oldDesc = $cur['description'];
+                    $upSi->bind_param("isddsis", $cat, $desc, $qty, $price, $newLine, $txnId, $oldDesc);
+                    $upSi->execute();
+                    $upSi->close();
+
+                    // Step 2: recalculate transaction total.
+                    $newTotal = (float)$conn->query("
+                        SELECT COALESCE(SUM(line_total), 0) AS t FROM sale_items WHERE transaction_id=$txnId
+                    ")->fetch_assoc()['t'];
+
+                    $upTxn = $conn->prepare("
+                        UPDATE sale_transactions
+                        SET subtotal=?, total=?, payment_method=?, sale_date=?
+                        WHERE id=?
+                    ");
+                    $upTxn->bind_param("ddssi", $newTotal, $newTotal, $pay, $date, $txnId);
+                    $upTxn->execute();
+                    $upTxn->close();
+                }
+
+                // Always sync the legacy sales row.
+                $upLeg = $conn->prepare("
+                    UPDATE sales
+                    SET category_id=?, description=?, quantity=?, unit_price=?,
+                        amount=?, payment_method=?, sale_date=?
+                    WHERE id=?
+                ");
+                $upLeg->bind_param("isdddssi", $cat, $desc, $qty, $price, $newLine, $pay, $date, $saleId);
+                $upLeg->execute();
+                $upLeg->close();
+
+                // Adjust stock if this item is linked to a stock_item and qty changed.
+                if ($stockItemId && $oldQty !== $qty) {
+                    StockService::adjustDifference(
+                        $conn, $stockItemId, $oldQty, $qty,
+                        "Edit sale #$saleId" . ($txnId ? " / Txn #$txnId" : "")
+                    );
+                }
+
+                $conn->commit();
+                auditLog($conn, 'sale_edit', "Edited sale #$saleId" . ($txnId ? " (Txn #$txnId)" : ''));
+                $_SESSION['flash'] = ['msg' => '&#10003; Sale updated.', 'type' => 'success'];
+
+            } catch (Exception $e) {
+                $conn->rollback();
+                $_SESSION['flash'] = ['msg' => 'Update failed: ' . $e->getMessage(), 'type' => 'error'];
+            }
         } else {
             $_SESSION['flash'] = ['msg' => implode(' | ', $errs), 'type' => 'error'];
         }
@@ -147,14 +269,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $siStmt->close();
 
                 // Legacy sales row (backward compatibility with reports/stats)
+                // transaction_id is stored here so delete/edit can find the parent transaction.
                 $lsStmt = $conn->prepare("
                     INSERT INTO sales
-                        (category_id, stock_item_id, description,
+                        (transaction_id, category_id, stock_item_id, description,
                          quantity, unit_price, amount, payment_method, sale_date)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ");
                 $lsStmt->bind_param(
-                    "iisdddss",
+                    "iiisdddss",
+                    $txnId,
                     $item['category_id'],
                     $item['stock_item_id'],
                     $item['description'],
@@ -286,6 +410,13 @@ require_once '../../includes/header.php';
 <?php if ($editRow): ?>
 <div class="card" style="border:2px solid var(--warning);">
   <h3 style="color:var(--warning);">&#9998; Editing Sale #<?= $editRow['id'] ?></h3>
+  <?php if (!empty($editRow['transaction_id'])): ?>
+  <p style="font-size:.8rem;color:#6b7280;margin:0 0 12px;">
+    Part of Transaction #<?= $editRow['transaction_id'] ?>.
+    This updates this line item and recalculates the transaction total.
+    To edit other items in the same transaction, delete and re-enter the sale.
+  </p>
+  <?php endif; ?>
   <form method="POST" action="">
     <?= csrfField() ?>
     <input type="hidden" name="edit_id" value="<?= $editRow['id'] ?>">
@@ -424,9 +555,9 @@ require_once '../../includes/header.php';
       <div id="paymentLines" style="display:flex;flex-direction:column;gap:8px;"></div>
 
       <button type="button" class="btn btn-secondary btn-sm"
-              onclick="addPaymentLine()" style="align-self:flex-start;">
-        + Add Payment Method
-      </button>
+        onclick="addPaymentLine()" style="align-self:flex-start;">
+  + Add Payment Method
+</button>
 
       <!-- Balance summary -->
       <div style="background:#f8f9fa;border-radius:8px;padding:12px 14px;font-size:.85rem;display:flex;flex-direction:column;gap:7px;">
@@ -729,11 +860,13 @@ function renderCart() {
     var total = cartTotal();
     document.getElementById('grandTotalDisplay').textContent = 'TZS ' + fmt(total);
 
-    // Auto-fill first payment line if still untouched
-    var firstPay = document.getElementById('pamt_0');
-    if (firstPay && (parseFloat(firstPay.value) || 0) === 0) {
-        firstPay.value = total.toFixed(2);
-    }
+    // Keep the first payment line in sync with the cart total
+    // as long as the user hasn't added a second payment line.
+    //var firstPay  = document.getElementById('pamt_0');
+    //var lineCount = document.querySelectorAll('[id^="pline_"]').length;
+    //if (firstPay && lineCount === 1) {
+    //    firstPay.value = total > 0 ? total.toFixed(2) : '';
+    //}
 
     recalcPayments();
 }
@@ -748,6 +881,8 @@ function addPaymentLine(defaultMethod, defaultAmount) {
     var div = document.createElement('div');
     div.id  = 'pline_' + idx;
     div.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;';
+
+    var amountHandler = (idx === 0) ? 'recalcPaymentsKeepCash()' : 'recalcPayments()';
 
     var methods = {
         cash:         '&#128181; Cash',
@@ -769,7 +904,7 @@ function addPaymentLine(defaultMethod, defaultAmount) {
             options +
         '</select>' +
         '<input type="number" name="payments[' + idx + '][amount]" id="pamt_' + idx + '" ' +
-               'placeholder="Amount" step="0.01" min="0.01" oninput="recalcPayments()" ' +
+               'placeholder="Amount" step="0.01" min="0.01" oninput="' + amountHandler + '" ' +
                'value="' + (defaultAmount || '') + '" ' +
                'style="flex:1;min-width:90px;padding:6px 8px;border-radius:6px;border:1.5px solid var(--border);font-size:.85rem;">' +
         '<input type="text" name="payments[' + idx + '][reference]" id="pref_' + idx + '" ' +
@@ -782,6 +917,30 @@ function addPaymentLine(defaultMethod, defaultAmount) {
         document.getElementById('pref_' + idx).style.display = '';
     }
     recalcPayments();
+}
+function recalcPaymentsKeepCash() {
+    var total = cartTotal();
+    var paid = 0;
+    document.querySelectorAll('[id^="pamt_"]').forEach(function(inp) {
+        paid += parseFloat(inp.value || 0);
+    });
+    var balance = total - paid;
+    var change  = paid > total ? paid - total : 0;
+
+    document.getElementById('payTotal').textContent   = 'TZS ' + fmt(total);
+    document.getElementById('payPaid').textContent    = 'TZS ' + fmt(paid);
+    document.getElementById('payBalance').textContent = 'TZS ' + fmt(balance > 0 ? balance : 0);
+    document.getElementById('payBalance').style.color = balance > 0.01 ? 'var(--danger)' : 'var(--success)';
+
+    var cb = document.getElementById('changeDueBox');
+    if (change > 0.01) {
+        document.getElementById('changeDueAmt').textContent = fmt(change);
+        cb.style.display = '';
+    } else {
+        cb.style.display = 'none';
+    }
+
+    document.getElementById('submitBtn').disabled = !(cart.length > 0 && total > 0 && balance <= 0.01);
 }
 
 function onMethodChange(sel, idx) {
@@ -796,10 +955,22 @@ function removePaymentLine(idx) {
     recalcPayments();
 }
 
-function recalcPayments() {
+function payBalanceValue() {
     var total = cartTotal();
     var paid  = 0;
+    document.querySelectorAll('[id^="pamt_"]').forEach(function(inp) {
+        paid += parseFloat(inp.value || 0);
+    });
+    var bal = total - paid;
+    return bal > 0 ? bal.toFixed(2) : '';
+}
 
+function recalcPayments() {
+    var total = cartTotal();
+
+    autoFillCash(total);
+
+    var paid = 0;
     document.querySelectorAll('[id^="pamt_"]').forEach(function(inp) {
         paid += parseFloat(inp.value || 0);
     });
@@ -821,6 +992,19 @@ function recalcPayments() {
     }
 
     document.getElementById('submitBtn').disabled = !(cart.length > 0 && total > 0 && balance <= 0.01);
+}
+
+function autoFillCash(total) {
+    var cashInput = document.getElementById('pamt_0');
+    if (!cashInput) return;
+
+    var othersPaid = 0;
+    document.querySelectorAll('[id^="pamt_"]').forEach(function(inp) {
+        if (inp.id !== 'pamt_0') othersPaid += parseFloat(inp.value || 0);
+    });
+
+    var remainder = total - othersPaid;
+    cashInput.value = remainder > 0 ? remainder.toFixed(2) : '0.00';
 }
 
 /* ─────────────────────────────────────────────────
@@ -978,12 +1162,20 @@ function flashCartWrap() {
     setTimeout(function() { wrap.style.background = ''; }, 400);
 }
 
-initSearch('salesSearch', 'salesTable');
+
 
 /* ─────────────────────────────────────────────────
    INIT
 ───────────────────────────────────────────────── */
-addPaymentLine('cash', '');
+addPaymentLine('cash', '0.00');
+renderCart(); // sync payment field on initial load
+
+window.addEventListener('load', function() {
+    initSearch('salesSearch', 'salesTable');
+});
+</script>
+
+<?php require_once '../../includes/footer.php'; ?>
 </script>
 
 <?php require_once '../../includes/footer.php'; ?>
