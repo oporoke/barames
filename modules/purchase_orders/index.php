@@ -35,6 +35,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $avgCost = round($avgCost, 2);
             $conn->query("UPDATE stock_items SET quantity=quantity+$actual, cost_price=$avgCost WHERE id=".(int)$poi['stock_item_id']);
+
+            if (round($existingCost, 2) !== $avgCost) {
+                $histStmt = $conn->prepare(
+                    "INSERT INTO cost_price_history (stock_item_id, cost_price, changed_by, note)
+                    VALUES (?, ?, ?, ?)"
+                );
+                $userId = $_SESSION['user_id'] ?? null;
+                $histNote = "Weighted avg after PO #$orderId receipt";
+                $stockItemId = (int)$poi['stock_item_id'];
+                $histStmt->bind_param("idis", $stockItemId, $avgCost, $userId, $histNote);
+                $histStmt->execute();
+                $histStmt->close();
+            }
+
             $today = date('Y-m-d');
             $note  = "PO #$orderId received";
             $conn->query("INSERT INTO stock_movements (stock_item_id,movement_type,quantity,note,moved_at) VALUES (".(int)$poi['stock_item_id'].",'in',$actual,'$note','$today')");

@@ -615,7 +615,6 @@ if ($bestSelling) {
       <a href="export_excel.php?type=<?= $type ?>&date=<?= $date ?>" class="rp-btn rp-btn-green">&#128196; Excel</a>
       <a href="http://localhost/barpos/modules/stock/report.php" target="_blank" class="rp-btn rp-btn-outline">&#128218; Stock</a>
       <a href="daily_cash_control.php?date=<?= date('Y-m-d') ?>" class="rp-btn rp-btn-accent">&#128197; Cash Control</a>
-      <a href="advanced/sales_by_item.php" class="rp-btn rp-btn-outline">&#128202; Advanced Reports</a>
     </div>
   </div>
 

@@ -49,15 +49,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $sell      = (float)($_POST['selling_price']       ?? 0);
 
             $stmt = $conn->prepare(
-                "INSERT INTO stock_items
-                    (category_id, name, sku, unit, quantity, low_stock_threshold, cost_price, selling_price)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-            );
-            $stmt->bind_param("isssdddd", $cat, $name, $sku, $unit, $qty, $threshold, $cost, $sell);
-            $stmt->execute();
-            $stmt->close();
+    "INSERT INTO stock_items
+        (category_id, name, sku, unit, quantity, low_stock_threshold, cost_price, selling_price)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+);
+$stmt->bind_param("isssdddd", $cat, $name, $sku, $unit, $qty, $threshold, $cost, $sell);
+$stmt->execute();
+$newItemId = $stmt->insert_id;
+$stmt->close();
 
-            auditLog($conn, 'stock_add', "Added: $name");
+$histStmt = $conn->prepare(
+    "INSERT INTO cost_price_history (stock_item_id, cost_price, changed_by, note)
+     VALUES (?, ?, ?, 'Item created')"
+);
+$userId = $_SESSION['user_id'] ?? null;
+$histStmt->bind_param("idi", $newItemId, $cost, $userId);
+$histStmt->execute();
+$histStmt->close();
+
+auditLog($conn, 'stock_add', "Added: $name");
             $_SESSION['flash'] = ['msg' => "&#10003; '$name' added.", 'type' => 'success'];
             header("Location: " . $_SERVER['PHP_SELF']);
             exit;
@@ -75,23 +85,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $sell      = (float)($_POST['selling_price']       ?? 0);
 
         if ($name === '') {
-            $_SESSION['flash'] = ['msg' => 'Item name is required.', 'type' => 'error'];
-        } else {
-            $stmt = $conn->prepare(
-                "UPDATE stock_items
-                    SET category_id = ?, name = ?, sku = ?, unit = ?,
-                        low_stock_threshold = ?, cost_price = ?, selling_price = ?
-                  WHERE id = ?"
-            );
-            $stmt->bind_param("isssdddi", $cat, $name, $sku, $unit, $threshold, $cost, $sell, $id);
-            $stmt->execute();
-            $stmt->close();
+    $_SESSION['flash'] = ['msg' => 'Item name is required.', 'type' => 'error'];
+} else {
+    $oldCostStmt = $conn->prepare("SELECT cost_price FROM stock_items WHERE id = ?");
+    $oldCostStmt->bind_param("i", $id);
+    $oldCostStmt->execute();
+    $oldCost = (float)($oldCostStmt->get_result()->fetch_assoc()['cost_price'] ?? 0);
+    $oldCostStmt->close();
 
-            auditLog($conn, 'stock_edit', "Edited item $id: $name");
-            $_SESSION['flash'] = ['msg' => "&#10003; '$name' updated.", 'type' => 'success'];
-        }
-        header("Location: " . $_SERVER['PHP_SELF']);
-        exit;
+    $stmt = $conn->prepare(
+        "UPDATE stock_items
+            SET category_id = ?, name = ?, sku = ?, unit = ?,
+                low_stock_threshold = ?, cost_price = ?, selling_price = ?
+          WHERE id = ?"
+    );
+    $stmt->bind_param("isssdddi", $cat, $name, $sku, $unit, $threshold, $cost, $sell, $id);
+    $stmt->execute();
+    $stmt->close();
+
+    if (round($oldCost, 2) !== round($cost, 2)) {
+        $histStmt = $conn->prepare(
+            "INSERT INTO cost_price_history (stock_item_id, cost_price, changed_by, note)
+             VALUES (?, ?, ?, 'Manual edit')"
+        );
+        $userId = $_SESSION['user_id'] ?? null;
+        $histStmt->bind_param("idi", $id, $cost, $userId);
+        $histStmt->execute();
+        $histStmt->close();
+    }
+
+    auditLog($conn, 'stock_edit', "Edited item $id: $name");
+    $_SESSION['flash'] = ['msg' => "&#10003; '$name' updated.", 'type' => 'success'];
+}
+header("Location: " . $_SERVER['PHP_SELF']);
+exit;
 
     // ── ADJUST ───────────────────────────────────────────────────────────────
     } elseif ($action === 'adjust') {

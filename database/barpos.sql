@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Jun 09, 2026 at 02:28 PM
+-- Generation Time: Jun 05, 2026 at 03:45 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -41,30 +41,7 @@ CREATE TABLE `audit_log` (
 --
 
 INSERT INTO `audit_log` (`id`, `user_id`, `action`, `detail`, `ip`, `created_at`) VALUES
-(1, 1, 'stock_edit', 'Edited item 34: CASTLE LAGER 375ML', '::1', '2026-06-07 09:49:46');
-
--- --------------------------------------------------------
-
---
--- Table structure for table `capital_injections`
---
-
-CREATE TABLE `capital_injections` (
-  `id` int(10) UNSIGNED NOT NULL,
-  `injection_date` date NOT NULL,
-  `amount` decimal(12,2) NOT NULL,
-  `method` enum('cash','lipa') NOT NULL DEFAULT 'cash',
-  `description` varchar(255) DEFAULT NULL,
-  `recorded_by` int(11) NOT NULL,
-  `created_at` datetime NOT NULL DEFAULT current_timestamp()
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
---
--- Dumping data for table `capital_injections`
---
-
-INSERT INTO `capital_injections` (`id`, `injection_date`, `amount`, `method`, `description`, `recorded_by`, `created_at`) VALUES
-(1, '2026-06-06', 300000.00, 'cash', 'Mr. Olayce top up', 1, '2026-06-09 12:08:01');
+(1, 1, 'login', 'User logged in', '::1', '2026-05-26 09:24:19');
 
 -- --------------------------------------------------------
 
@@ -75,7 +52,7 @@ INSERT INTO `capital_injections` (`id`, `injection_date`, `amount`, `method`, `d
 CREATE TABLE `categories` (
   `id` int(11) NOT NULL,
   `name` varchar(100) NOT NULL,
-  `type` enum('drinks','kitchen','staff','other','stock') NOT NULL,
+  `type` enum('drinks','kitchen','staff','other') NOT NULL DEFAULT 'other',
   `created_at` timestamp NOT NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -87,35 +64,7 @@ INSERT INTO `categories` (`id`, `name`, `type`, `created_at`) VALUES
 (1, 'Drinks', 'drinks', '2026-05-25 10:51:58'),
 (2, 'Kitchen', 'kitchen', '2026-05-25 10:51:58'),
 (3, 'Staff', 'staff', '2026-05-25 15:07:13'),
-(4, 'Other', 'other', '2026-05-25 15:07:43'),
-(5, 'Stock', 'stock', '2026-06-09 10:01:12');
-
--- --------------------------------------------------------
-
---
--- Table structure for table `daily_cash_control`
---
-
-CREATE TABLE `daily_cash_control` (
-  `id` int(10) UNSIGNED NOT NULL,
-  `report_date` date NOT NULL,
-  `opening_cash` decimal(12,2) NOT NULL DEFAULT 0.00,
-  `opening_lipa` decimal(12,2) NOT NULL DEFAULT 0.00,
-  `closing_cash` decimal(12,2) DEFAULT NULL,
-  `closing_lipa` decimal(12,2) DEFAULT NULL,
-  `notes` text DEFAULT NULL,
-  `created_by` int(11) NOT NULL,
-  `updated_by` int(11) DEFAULT NULL,
-  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp()
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
---
--- Dumping data for table `daily_cash_control`
---
-
-INSERT INTO `daily_cash_control` (`id`, `report_date`, `opening_cash`, `opening_lipa`, `closing_cash`, `closing_lipa`, `notes`, `created_by`, `updated_by`, `created_at`, `updated_at`) VALUES
-(1, '2026-06-07', 568750.00, 248220.00, 748550.00, 248220.00, 'The resetting amount', 1, 1, '2026-06-08 22:17:35', '2026-06-08 22:26:32');
+(4, 'Other', 'other', '2026-05-25 15:07:43');
 
 -- --------------------------------------------------------
 
@@ -138,7 +87,7 @@ CREATE TABLE `expenses` (
 --
 
 INSERT INTO `expenses` (`id`, `category_id`, `description`, `amount`, `expense_date`, `is_duplicate_flag`, `created_at`) VALUES
-(1, 3, 'Staff food', 6000.00, '2026-06-07', 0, '2026-06-07 20:52:19');
+(1, 1, 'Stock refil', 56700.00, '2026-04-09', 0, '2026-05-25 14:57:16');
 
 -- --------------------------------------------------------
 
@@ -157,15 +106,6 @@ CREATE TABLE `purchase_orders` (
   `created_at` timestamp NOT NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
---
--- Dumping data for table `purchase_orders`
---
-
-INSERT INTO `purchase_orders` (`id`, `supplier_id`, `order_date`, `status`, `total_amount`, `notes`, `created_by`, `created_at`) VALUES
-(1, 1, '2026-06-08', 'received', 418499.86, 'Reset stock', 1, '2026-06-08 18:13:02'),
-(2, 1, '2026-06-08', 'received', 10000.00, 'NEW PRODUCT', 1, '2026-06-08 18:35:20'),
-(3, 1, '2026-06-08', 'received', 8000.00, 'CUPS', 1, '2026-06-08 18:45:45');
-
 -- --------------------------------------------------------
 
 --
@@ -181,13 +121,6 @@ CREATE TABLE `purchase_order_items` (
   `unit_cost` decimal(10,2) NOT NULL,
   `total_cost` decimal(10,2) GENERATED ALWAYS AS (`quantity_ordered` * `unit_cost`) STORED
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
---
--- Dumping data for table `purchase_order_items`
---
-
-INSERT INTO `purchase_order_items` (`id`, `order_id`, `stock_item_id`, `quantity_ordered`, `quantity_received`, `unit_cost`) VALUES
-(1, 1, 16, 12.00, 12.00, 583.33);
 
 -- --------------------------------------------------------
 
@@ -273,7 +206,7 @@ CREATE TABLE `sale_items` (
 --
 
 INSERT INTO `sale_items` (`id`, `transaction_id`, `category_id`, `stock_item_id`, `description`, `quantity`, `unit_price`, `line_total`, `created_at`) VALUES
-(1, 124, 1, 10, 'CASTLE LITE', 1.000, 3000.00, 3000.00, '2026-06-07 20:33:44');
+(1, 1, 1, NULL, '', 1.000, 2500.00, 7500.00, '2026-05-25 17:45:23');
 
 -- --------------------------------------------------------
 
@@ -290,7 +223,6 @@ CREATE TABLE `sale_transactions` (
   `tab_status` enum('open','closed','voided') NOT NULL DEFAULT 'closed',
   `ref_transaction_id` int(10) UNSIGNED DEFAULT NULL,
   `payment_method` varchar(30) NOT NULL DEFAULT 'cash',
-  `payment_reference` varchar(100) DEFAULT NULL,
   `subtotal` decimal(12,2) NOT NULL DEFAULT 0.00,
   `discount` decimal(12,2) NOT NULL DEFAULT 0.00,
   `tax_rate` decimal(5,2) NOT NULL DEFAULT 0.00,
@@ -305,8 +237,8 @@ CREATE TABLE `sale_transactions` (
 -- Dumping data for table `sale_transactions`
 --
 
-INSERT INTO `sale_transactions` (`id`, `cashier_id`, `shift_id`, `type`, `table_id`, `tab_status`, `ref_transaction_id`, `payment_method`, `payment_reference`, `subtotal`, `discount`, `tax_rate`, `tax_amount`, `total`, `note`, `sale_date`, `created_at`) VALUES
-(1, NULL, NULL, 'sale', NULL, 'closed', NULL, 'cash', NULL, 7500.00, 0.00, 0.00, 0.00, 7500.00, NULL, '2026-04-09', '2026-05-25 17:45:23');
+INSERT INTO `sale_transactions` (`id`, `cashier_id`, `shift_id`, `type`, `table_id`, `tab_status`, `ref_transaction_id`, `payment_method`, `subtotal`, `discount`, `tax_rate`, `tax_amount`, `total`, `note`, `sale_date`, `created_at`) VALUES
+(1, NULL, NULL, 'sale', NULL, 'closed', NULL, 'cash', 7500.00, 0.00, 0.00, 0.00, 7500.00, NULL, '2026-04-09', '2026-05-25 17:45:23');
 
 -- --------------------------------------------------------
 
@@ -327,7 +259,7 @@ CREATE TABLE `settings` (
 --
 
 INSERT INTO `settings` (`id`, `setting_key`, `setting_value`, `setting_group`, `updated_at`) VALUES
-(1, 'business_name', 'Tretat Bar & Restaurant', 'general', '2026-06-06 08:15:50');
+(1, 'business_name', 'Bar & Restaurant', 'general', '2026-06-02 15:55:16');
 
 -- --------------------------------------------------------
 
@@ -377,7 +309,7 @@ CREATE TABLE `stock_items` (
 --
 
 INSERT INTO `stock_items` (`id`, `category_id`, `name`, `sku`, `barcode`, `supplier_id`, `unit`, `quantity`, `low_stock_threshold`, `cost_price`, `selling_price`, `is_active`, `created_at`, `updated_at`) VALUES
-(1, 1, 'AFYA MAJI KUBWA 1.6L', '6203003251019', NULL, NULL, 'pcs', 9.00, 5.00, 583.33, 2000.00, 1, '2026-05-25 10:59:07', '2026-06-09 11:37:22');
+(1, 1, 'AFYA MAJI KUBWA 1.6L', '6203003251019', NULL, NULL, 'pcs', 0.00, 5.00, 583.00, 2000.00, 1, '2026-05-25 10:59:07', '2026-06-04 08:41:38');
 
 -- --------------------------------------------------------
 
@@ -400,7 +332,7 @@ CREATE TABLE `stock_movements` (
 --
 
 INSERT INTO `stock_movements` (`id`, `stock_item_id`, `movement_type`, `quantity`, `note`, `moved_at`, `created_at`) VALUES
-(1, 10, 'out', 1.00, 'Txn #124', '2026-06-07', '2026-06-07 17:33:44');
+(1, 8, 'in', 15.00, '', '2026-05-25', '2026-05-25 11:24:52');
 
 -- --------------------------------------------------------
 
@@ -424,7 +356,7 @@ CREATE TABLE `suppliers` (
 --
 
 INSERT INTO `suppliers` (`id`, `name`, `contact_person`, `phone`, `email`, `address`, `is_active`, `created_at`) VALUES
-(1, 'KIGAMBONI', 'Mrs. Chef', '0778140170', 'k@e.com', 'Geza', 1, '2026-06-04 10:06:24');
+(1, 'KIGAMBONI', 'Mrs. Chef', '0778140170', 'k@e.com', 'Geza', NULL, '2026-06-04 10:06:24');
 
 -- --------------------------------------------------------
 
@@ -441,28 +373,6 @@ CREATE TABLE `till_movements` (
   `reason` varchar(255) NOT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
--- --------------------------------------------------------
-
---
--- Table structure for table `transaction_payments`
---
-
-CREATE TABLE `transaction_payments` (
-  `id` int(10) UNSIGNED NOT NULL,
-  `transaction_id` int(10) UNSIGNED NOT NULL,
-  `method` enum('cash','mobile_money','card','other') NOT NULL,
-  `amount` decimal(12,2) NOT NULL,
-  `reference` varchar(100) DEFAULT NULL,
-  `created_at` datetime DEFAULT current_timestamp()
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
---
--- Dumping data for table `transaction_payments`
---
-
-INSERT INTO `transaction_payments` (`id`, `transaction_id`, `method`, `amount`, `reference`, `created_at`) VALUES
-(1, 102, 'cash', 100000.00, '', '2026-06-05 18:08:18');
 
 -- --------------------------------------------------------
 
@@ -486,9 +396,9 @@ CREATE TABLE `users` (
 --
 
 INSERT INTO `users` (`id`, `name`, `username`, `password`, `role`, `is_active`, `last_login`, `created_at`) VALUES
-(1, 'Admin', 'admin', '$2y$12$i5cGQfGI2fM0D/Pcl.3Bru1JZDd1EAbidytrIi76QwW9/D3I17ABq', 'admin', 1, '2026-06-09 11:00:21', '2026-05-26 09:13:08'),
+(1, 'Administrator', 'admin', '$2y$12$l0mUv0rlpFg0XzmLxtvSZeVYyWcV9seh4H0oFNrIYT4fD3gzugQxK', 'admin', 1, '2026-06-05 14:56:49', '2026-05-26 09:13:08'),
 (4, 'aziz', 'aziz', '$2y$12$.E.0L3mOgtfC3Y1RLcrSC.hGm0EIEbtd3oCPkwX.l8cp855kenHny', 'cashier', 1, '2026-05-26 12:32:12', '2026-05-26 09:31:43'),
-(5, 'Nich', 'man', '$2y$12$zEm4YNXsuklCf6P3kCCGuuZkNPNXienAfI4AoKZOi2luK8PH14t5W', 'manager', 1, '2026-05-26 12:33:39', '2026-05-26 09:33:26');
+(5, 'man', 'man', '$2y$12$zEx9yOz1jDH9JAJmjhN68egeUhRQFdjWTyR3SzuGMz6JY9roh./Jy', 'manager', 1, '2026-05-26 12:33:39', '2026-05-26 09:33:26');
 
 --
 -- Indexes for dumped tables
@@ -502,23 +412,10 @@ ALTER TABLE `audit_log`
   ADD KEY `user_id` (`user_id`);
 
 --
--- Indexes for table `capital_injections`
---
-ALTER TABLE `capital_injections`
-  ADD PRIMARY KEY (`id`);
-
---
 -- Indexes for table `categories`
 --
 ALTER TABLE `categories`
   ADD PRIMARY KEY (`id`);
-
---
--- Indexes for table `daily_cash_control`
---
-ALTER TABLE `daily_cash_control`
-  ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `report_date` (`report_date`);
 
 --
 -- Indexes for table `expenses`
@@ -631,13 +528,6 @@ ALTER TABLE `till_movements`
   ADD KEY `idx_tm_shift` (`shift_id`);
 
 --
--- Indexes for table `transaction_payments`
---
-ALTER TABLE `transaction_payments`
-  ADD PRIMARY KEY (`id`),
-  ADD KEY `idx_tp_transaction` (`transaction_id`);
-
---
 -- Indexes for table `users`
 --
 ALTER TABLE `users`
@@ -652,25 +542,13 @@ ALTER TABLE `users`
 -- AUTO_INCREMENT for table `audit_log`
 --
 ALTER TABLE `audit_log`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=107;
-
---
--- AUTO_INCREMENT for table `capital_injections`
---
-ALTER TABLE `capital_injections`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=232;
 
 --
 -- AUTO_INCREMENT for table `categories`
 --
 ALTER TABLE `categories`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
-
---
--- AUTO_INCREMENT for table `daily_cash_control`
---
-ALTER TABLE `daily_cash_control`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
 -- AUTO_INCREMENT for table `expenses`
@@ -682,13 +560,13 @@ ALTER TABLE `expenses`
 -- AUTO_INCREMENT for table `purchase_orders`
 --
 ALTER TABLE `purchase_orders`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `purchase_order_items`
 --
 ALTER TABLE `purchase_order_items`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=20;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `receipts`
@@ -712,19 +590,19 @@ ALTER TABLE `sales`
 -- AUTO_INCREMENT for table `sale_items`
 --
 ALTER TABLE `sale_items`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=75;
+  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=104;
 
 --
 -- AUTO_INCREMENT for table `sale_transactions`
 --
 ALTER TABLE `sale_transactions`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=172;
+  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=102;
 
 --
 -- AUTO_INCREMENT for table `settings`
 --
 ALTER TABLE `settings`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=14;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
 
 --
 -- AUTO_INCREMENT for table `shifts`
@@ -742,7 +620,7 @@ ALTER TABLE `stock_items`
 -- AUTO_INCREMENT for table `stock_movements`
 --
 ALTER TABLE `stock_movements`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=94;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=77;
 
 --
 -- AUTO_INCREMENT for table `suppliers`
@@ -755,12 +633,6 @@ ALTER TABLE `suppliers`
 --
 ALTER TABLE `till_movements`
   MODIFY `id` int(11) UNSIGNED NOT NULL AUTO_INCREMENT;
-
---
--- AUTO_INCREMENT for table `transaction_payments`
---
-ALTER TABLE `transaction_payments`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=68;
 
 --
 -- AUTO_INCREMENT for table `users`
@@ -844,12 +716,6 @@ ALTER TABLE `stock_movements`
 ALTER TABLE `till_movements`
   ADD CONSTRAINT `fk_tm_cashier` FOREIGN KEY (`cashier_id`) REFERENCES `users` (`id`),
   ADD CONSTRAINT `fk_tm_shift` FOREIGN KEY (`shift_id`) REFERENCES `shifts` (`id`);
-
---
--- Constraints for table `transaction_payments`
---
-ALTER TABLE `transaction_payments`
-  ADD CONSTRAINT `transaction_payments_ibfk_1` FOREIGN KEY (`transaction_id`) REFERENCES `sale_transactions` (`id`) ON DELETE CASCADE;
 COMMIT;
 
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
